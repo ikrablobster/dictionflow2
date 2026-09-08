@@ -1,0 +1,67 @@
+[package]
+name = "dictaflow"
+version = "0.1.0"
+description = "Real-time offline-first voice dictation with smart punctuation for Windows"
+authors = ["DictaFlow"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-store = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-autostart = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+thiserror = "1"
+
+# Аудио захват с микрофона (кроссплатформенно)
+cpal = "0.15"
+
+# Определение речевой активности (энергетический VAD как fallback,
+# при наличии сети в CI подключается модель Silero через onnxruntime)
+webrtc-vad = "0.4"
+
+# Биндинги к whisper.cpp — офлайн-распознавание речи
+whisper-rs = { version = "0.13", features = ["metal"], optional = true }
+
+# Симуляция ввода с клавиатуры / буфер обмена — вставка текста в активное окно
+enigo = "0.2"
+
+# Глобальные хоткеи на низком уровне (доп. к плагину tauri, нужно для press&hold)
+rdev = "0.5"
+
+# Локальная база истории диктовок
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Для облачного режима (опционально): HTTP-клиент
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+dirs-next = "2"
+
+[features]
+default = ["local-whisper"]
+local-whisper = ["whisper-rs"]
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
+clipboard-win = "5"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
