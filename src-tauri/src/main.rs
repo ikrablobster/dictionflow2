@@ -88,7 +88,12 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
                     let state = app.state::<AppState>();
-                    if let Ok(items) = history::search(&state.db.lock().unwrap(), "") {
+                    let items = {
+                        let db = state.db.lock().unwrap();
+                        history::search(&db, "")
+                    };
+
+                    if let Ok(items) = items {
                         if let Some(last) = items.first() {
                             let cfg = state.config.lock().unwrap().clone();
                             let _ = inject::insert_text(&last.text, &cfg.insertion_mode);
