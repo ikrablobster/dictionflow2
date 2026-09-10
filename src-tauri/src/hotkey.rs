@@ -4,6 +4,12 @@ use std::sync::Arc;
 use std::thread;
 
 /// Переводит человекочитаемое имя хоткея (как хранится в конфиге) в rdev::Key.
+///
+/// ВАЖНО: F13/F14 сюда сознательно не включены — в rdev 0.5.3 (версия,
+/// которая реально резолвится по нашим Cargo.toml-ограничениям) этих
+/// вариантов enum'а Key не существует (E0599 no variant named `F13`).
+/// Расширенные функциональные клавиши появились в более поздних версиях
+/// крейта; если понадобятся — обновить rdev и вернуть эти строки.
 pub fn key_from_name(name: &str) -> Option<Key> {
     match name {
         "RightCtrl" => Some(Key::ControlRight),
@@ -12,8 +18,6 @@ pub fn key_from_name(name: &str) -> Option<Key> {
         "LeftAlt" => Some(Key::Alt),
         "CapsLock" => Some(Key::CapsLock),
         "RightShift" => Some(Key::ShiftRight),
-        "F13" => Some(Key::F13),
-        "F14" => Some(Key::F14),
         _ => None,
     }
 }
@@ -82,8 +86,6 @@ fn key_to_name(key: Key) -> String {
         Key::Alt => "LeftAlt".into(),
         Key::CapsLock => "CapsLock".into(),
         Key::ShiftRight => "RightShift".into(),
-        Key::F13 => "F13".into(),
-        Key::F14 => "F14".into(),
         other => format!("{other:?}"),
     }
 }

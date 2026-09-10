@@ -59,24 +59,31 @@ fn insert_via_clipboard(text: &str) -> anyhow::Result<()> {
     insert_via_typing(text)
 }
 
+// ВАЖНО: crate `clipboard-win` объявлен в Cargo.toml только как
+// target-зависимость для Windows (`[target.'cfg(windows)'.dependencies]`).
+// На macOS/Linux этого крейта физически нет в дереве зависимостей, поэтому
+// `use clipboard_win::...` должен находиться СТРОГО внутри cfg(windows)-блока,
+// а не на верхнем уровне модуля — иначе получаем E0432 unresolved import.
+#[cfg(target_os = "windows")]
 fn get_clipboard_text() -> Option<String> {
     use clipboard_win::{formats, get_clipboard};
-    #[cfg(target_os = "windows")]
-    {
-        get_clipboard(formats::Unicode).ok()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        None
-    }
+    get_clipboard(formats::Unicode).ok()
 }
 
+#[cfg(not(target_os = "windows"))]
+fn get_clipboard_text() -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "windows")]
 fn set_clipboard_text(text: &str) -> anyhow::Result<()> {
-    #[cfg(target_os = "windows")]
-    {
-        use clipboard_win::{formats, set_clipboard};
-        set_clipboard(formats::Unicode, text)
-            .map_err(|e| anyhow::anyhow!("Ошибка буфера обмена: {e:?}"))?;
-    }
+    use clipboard_win::{formats, set_clipboard};
+    set_clipboard(formats::Unicode, text)
+        .map_err(|e| anyhow::anyhow!("Ошибка буфера обмена: {e:?}"))?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_clipboard_text(_text: &str) -> anyhow::Result<()> {
     Ok(())
 }

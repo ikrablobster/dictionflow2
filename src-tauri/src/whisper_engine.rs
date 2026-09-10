@@ -111,8 +111,11 @@ impl WhisperEngine {
             text.push_str(&state.full_get_segment_text(i)?);
         }
 
+        // ВАЖНО: в whisper-rs 0.13.2 метод называется `full_lang_id_from_state`,
+        // а не `full_lang_id` (которого у WhisperState вообще нет — E0599,
+        // компилятор сам подсказал верное имя через "help: there is a method...").
         let detected_lang = state
-            .full_lang_id()
+            .full_lang_id_from_state()
             .ok()
             .map(|id| whisper_rs::get_lang_str(id).unwrap_or("auto").to_string())
             .unwrap_or_else(|| "auto".to_string());

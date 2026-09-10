@@ -1,11 +1,25 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
 
+/// cpal::Stream на некоторых backend'ах (в частности CoreAudio на macOS)
+/// содержит внутри raw-указатели и Box<dyn FnMut()>, из-за чего компилятор
+/// не считает его Send/Sync. Tauri требует, чтобы всё управляемое состояние
+/// (AppState) было Send + Sync, иначе тип `State<AppState>` не компилируется
+/// вообще (и это давало каскад "no field" ошибок в commands.rs/main.rs).
+///
+/// Оборачиваем Stream в newtype и даём unsafe-гарантию: это безопасно, потому
+/// что сам аудио-поток обрабатывается cpal на своём внутреннем потоке, а мы
+/// извне трогаем только через Mutex<AudioCapture> — то есть одновременного
+/// доступа из нескольких потоков к самому объекту Stream у нас не бывает.
+struct StreamHandle(cpal::Stream);
+unsafe impl Send for StreamHandle {}
+unsafe impl Sync for StreamHandle {}
+
 /// Захват аудио с микрофона по умолчанию, ресемплинг до 16кГц моно —
 /// формат, который ожидает whisper.cpp.
 pub struct AudioCapture {
     buffer: Arc<Mutex<Vec<f32>>>,
-    stream: Option<cpal::Stream>,
+    stream: Option<StreamHandle>,
 }
 
 impl AudioCapture {
@@ -57,7 +71,7 @@ impl AudioCapture {
         };
 
         stream.play()?;
-        self.stream = Some(stream);
+        self.stream = Some(StreamHandle(stream));
         Ok(())
     }
 
