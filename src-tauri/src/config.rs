@@ -5,36 +5,29 @@ use std::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum LanguageMode {
-    Auto,
-    Ru,
-    Uk,
-    En,
-}
+pub enum LanguageMode { Auto, Ru, Uk, En }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelSize {
-    Tiny,
-    Base,
-    Small,
-    Medium,
+    Tiny, Base, Small, Medium,
     #[serde(rename = "large-v3")]
     LargeV3,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum InsertionMode {
-    Type,
-    ClipboardPaste,
-}
+pub enum InsertionMode { Type, ClipboardPaste }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     pub hotkey: String,
-    pub language_mode: String, // "auto" | "ru" | "uk" | "en" — держим строкой для простоты сериализации с фронтом
+    pub language_mode: String,
     pub model_size: String,
+    pub input_device: String,
+    pub show_transcription_overlay: bool,
+    pub live_preview: bool,
     pub cloud_enabled: bool,
     pub cloud_api_key: String,
     pub auto_punctuation: bool,
@@ -52,13 +45,16 @@ impl Default for AppConfig {
             hotkey: "RightCtrl".to_string(),
             language_mode: "auto".to_string(),
             model_size: "small".to_string(),
+            input_device: String::new(),
+            show_transcription_overlay: true,
+            live_preview: true,
             cloud_enabled: false,
             cloud_api_key: String::new(),
             auto_punctuation: true,
             grammar_correction: true,
             voice_commands: true,
             custom_dictionary: vec![],
-            insertion_mode: "type".to_string(),
+            insertion_mode: "clipboard_paste".to_string(),
             start_with_windows: false,
             minimize_to_tray: true,
         }
@@ -86,8 +82,7 @@ pub fn load_config() -> AppConfig {
 }
 
 pub fn save_config(cfg: &AppConfig) -> anyhow::Result<()> {
-    let path = config_path();
     let raw = serde_json::to_string_pretty(cfg)?;
-    fs::write(path, raw)?;
+    fs::write(config_path(), raw)?;
     Ok(())
 }
