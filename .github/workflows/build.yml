@@ -56,8 +56,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: dictaflow-v__VERSION__
-          releaseName: "DictaFlow v__VERSION__"
+          tagName: v0.1.0
+          releaseName: "dictaflow-v0.1.0"
           releaseBody: "Автоматическая сборка DictaFlow. Скачай установщик для своей ОС из Assets ниже."
           releaseDraft: true
           prerelease: false
