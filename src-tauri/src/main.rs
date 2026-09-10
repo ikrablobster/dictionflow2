@@ -14,7 +14,7 @@ use state::AppState;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    Manager,
+    Emitter, Manager,
 };
 
 fn main() {
@@ -73,8 +73,6 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "Полностью выйти из DictaFlow", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&settings, &history, &sep1, &paste, &restart, &quit])?;
 
-    // IMPORTANT: tauri.conf.json no longer creates a second declarative tray.
-    // This is the single tray icon for the whole application.
     TrayIconBuilder::with_id("dictaflow-main-tray")
         .menu(&menu)
         .tooltip("DictaFlow — голос в текст")
