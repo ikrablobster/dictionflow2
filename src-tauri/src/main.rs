@@ -12,7 +12,7 @@ mod whisper_engine;
 
 use state::AppState;
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
     Manager,
 };
@@ -34,6 +34,10 @@ fn main() {
             commands::engine_ping,
             commands::get_config,
             commands::set_config,
+            commands::list_input_devices,
+            commands::get_audio_level,
+            commands::start_microphone_test,
+            commands::stop_microphone_test,
             commands::capture_next_hotkey,
             commands::start_dictation,
             commands::stop_dictation,
@@ -46,12 +50,13 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let state = window.state::<AppState>();
-                let minimize = state.config.lock().unwrap().minimize_to_tray;
-                if minimize {
-                    api.prevent_close();
-                    let _ = window.hide();
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    let state = window.state::<AppState>();
+                    if state.config.lock().unwrap().minimize_to_tray {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
                 }
             }
         })
@@ -60,35 +65,59 @@ fn main() {
 }
 
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "Открыть DictaFlow", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let settings = MenuItem::with_id(app, "settings", "Настройки", true, None::<&str>)?;
+    let history = MenuItem::with_id(app, "history", "Просмотреть историю", true, None::<&str>)?;
+    let paste = MenuItem::with_id(app, "paste_last", "Вставить последнюю транскрипцию", true, None::<&str>)?;
+    let sep1 = PredefinedMenuItem::separator(app)?;
+    let restart = MenuItem::with_id(app, "restart", "Перезапустить...", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Полностью выйти из DictaFlow", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&settings, &history, &sep1, &paste, &restart, &quit])?;
 
-    TrayIconBuilder::new()
+    // IMPORTANT: tauri.conf.json no longer creates a second declarative tray.
+    // This is the single tray icon for the whole application.
+    TrayIconBuilder::with_id("dictaflow-main-tray")
         .menu(&menu)
         .tooltip("DictaFlow — голос в текст")
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => {
+            "settings" | "history" => {
                 if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                    let _ = win.emit("dictaflow://navigate", event.id.as_ref());
+                }
+            }
+            "paste_last" => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app.state::<AppState>();
+                    if let Ok(items) = history::search(&state.db.lock().unwrap(), "") {
+                        if let Some(last) = items.first() {
+                            let cfg = state.config.lock().unwrap().clone();
+                            let _ = inject::insert_text(&last.text, &cfg.insertion_mode);
+                        }
+                    }
+                });
+            }
+            "restart" => app.restart(),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let tauri::tray::TrayIconEvent::DoubleClick { .. } = event {
+                if let Some(win) = tray.app_handle().get_webview_window("main") {
                     let _ = win.show();
                     let _ = win.set_focus();
                 }
             }
-            "quit" => app.exit(0),
-            _ => {}
         })
         .build(app)?;
     Ok(())
 }
 
-/// Регистрирует низкоуровневый listener клавиатуры (rdev), реагирующий
-/// на press&hold настроенной в конфиге клавиши из ЛЮБОГО приложения Windows,
-/// не только когда окно DictaFlow в фокусе.
 fn setup_global_hotkey(app: tauri::AppHandle) {
     let app_for_get_key = app.clone();
     let app_for_press = app.clone();
     let app_for_release = app.clone();
-
     hotkey::spawn_listener(
         move || {
             let state = app_for_get_key.state::<AppState>();
