@@ -12,28 +12,27 @@ interface HistoryEntry {
 export default function History() {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [query, setQuery] = useState("");
-
-  const load = async (q: string) => {
-    const res = await invoke<HistoryEntry[]>("search_history", { query: q });
-    setEntries(res);
-  };
+  const [error, setError] = useState("");
+  const [revision, setRevision] = useState(0);
 
   useEffect(() => {
-    load("");
-  }, []);
-
-  useEffect(() => {
-    const t = setTimeout(() => load(query), 200);
-    return () => clearTimeout(t);
-  }, [query]);
+    let disposed = false;
+    const t = setTimeout(() => {
+      invoke<HistoryEntry[]>("search_history", { query }).then((rows) => {
+        if (!disposed) { setEntries(rows); setError(""); }
+      }).catch((e) => { if (!disposed) setError(String(e)); });
+    }, 200);
+    return () => { disposed = true; clearTimeout(t); };
+  }, [query, revision]);
 
   const clearAll = async () => {
-    await invoke("clear_history");
-    setEntries([]);
+    try { await invoke("clear_history"); setEntries([]); setRevision((v) => v + 1); }
+    catch (e) { setError(String(e)); }
   };
 
   return (
     <div className="history">
+      {error && <p className="error-text" role="alert">{error}</p>}
       <div className="row">
         <input
           placeholder="Поиск по истории..."

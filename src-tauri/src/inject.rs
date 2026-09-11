@@ -1,5 +1,15 @@
 use enigo::{Enigo, Keyboard, Settings as EnigoSettings};
 
+pub fn foreground_window() -> Option<isize> {
+    #[cfg(windows)]
+    {
+        let window = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
+        if window.0.is_null() { None } else { Some(window.0 as isize) }
+    }
+    #[cfg(not(windows))]
+    { None }
+}
+
 /// Вставляет текст в текущее активное окно (то, что было в фокусе
 /// на момент отпускания горячей клавиши).
 ///
@@ -40,13 +50,15 @@ fn insert_via_clipboard(text: &str) -> anyhow::Result<()> {
     let mut enigo = Enigo::new(&EnigoSettings::default())
         .map_err(|e| anyhow::anyhow!("Не удалось инициализировать эмуляцию ввода: {e:?}"))?;
     enigo.key(Key::Control, Direction::Press)?;
-    enigo.key(Key::Unicode('v'), Direction::Click)?;
-    enigo.key(Key::Control, Direction::Release)?;
+    let paste = enigo.key(Key::Unicode('v'), Direction::Click);
+    let release = enigo.key(Key::Control, Direction::Release);
+    paste?;
+    release?;
 
     // Небольшая задержка перед восстановлением старого буфера, чтобы вставка успела произойти
     std::thread::sleep(std::time::Duration::from_millis(150));
-    if let Some(prev) = previous {
-        let _ = set_clipboard_text(&prev);
+    if get_clipboard_text().as_deref() == Some(text) {
+        if let Some(prev) = previous { let _ = set_clipboard_text(&prev); }
     }
 
     Ok(())

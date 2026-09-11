@@ -83,6 +83,17 @@ pub fn load_config() -> AppConfig {
 
 pub fn save_config(cfg: &AppConfig) -> anyhow::Result<()> {
     let raw = serde_json::to_string_pretty(cfg)?;
-    fs::write(config_path(), raw)?;
+    let path = config_path();
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, raw)?;
+    fs::rename(temporary, path)?;
+    Ok(())
+}
+
+pub fn validate(cfg: &AppConfig) -> Result<(), String> {
+    if crate::hotkey::key_from_name(&cfg.hotkey).is_none() { return Err("Неподдерживаемая горячая клавиша".into()); }
+    if !matches!(cfg.model_size.as_str(), "tiny" | "base" | "small" | "medium" | "large-v3") { return Err("Неизвестная модель".into()); }
+    if !matches!(cfg.language_mode.as_str(), "auto" | "ru" | "uk" | "en") { return Err("Неизвестный язык".into()); }
+    if !matches!(cfg.insertion_mode.as_str(), "type" | "clipboard_paste") { return Err("Неизвестный способ вставки".into()); }
     Ok(())
 }

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop-events",
+  "description": "Receive recording status and transcription events in both local windows.",
+  "windows": ["main", "overlay"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}

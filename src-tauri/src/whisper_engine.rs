@@ -40,15 +40,56 @@ pub fn model_path(size: &str) -> PathBuf {
 }
 
 /// Скачивает модель, если она ещё не загружена локально.
-pub async fn ensure_model_downloaded(size: &str) -> anyhow::Result<PathBuf> {
+pub async fn ensure_model_downloaded(size: &str, progress: impl Fn(String)) -> anyhow::Result<PathBuf> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    anyhow::ensure!(matches!(size, "tiny" | "base" | "small" | "medium" | "large-v3"), "Неизвестная модель");
     let path = model_path(size);
-    if path.exists() {
-        return Ok(path);
+    if let Ok(mut file) = tokio::fs::File::open(&path).await {
+        let mut magic = [0; 4];
+        if file.read_exact(&mut magic).await.is_ok() && &magic == b"lmgg"
+            && file.metadata().await?.len() > 1_000_000 {
+            return Ok(path);
+        }
     }
     let url = model_url(size);
-    let resp = reqwest::get(&url).await?;
-    let bytes = resp.bytes().await?;
-    std::fs::write(&path, &bytes)?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(20))
+        .read_timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_secs(1800)).build()?;
+    let mut resp = client.get(&url).send().await?.error_for_status()?;
+    let total = resp.content_length();
+    let temporary = path.with_extension("bin.part");
+    let result = async {
+        let mut file = tokio::fs::File::create(&temporary).await?;
+        let mut received = 0u64;
+        let mut last_update = std::time::Instant::now();
+        while let Some(chunk) = resp.chunk().await? {
+            file.write_all(&chunk).await?;
+            received += chunk.len() as u64;
+            if last_update.elapsed().as_millis() >= 500 {
+                let message = match total {
+                    Some(total) => format!("Загрузка {size}: {} / {} МБ", received / 1_000_000, total / 1_000_000),
+                    None => format!("Загрузка {size}: {} МБ", received / 1_000_000),
+                };
+                progress(message);
+                last_update = std::time::Instant::now();
+            }
+        }
+        anyhow::ensure!(total.map_or(true, |total| received == total), "Модель скачана не полностью");
+        anyhow::ensure!(received > 1_000_000, "Сервер вернул некорректную модель");
+        file.sync_all().await?;
+        drop(file);
+        let mut file = tokio::fs::File::open(&temporary).await?;
+        let mut magic = [0; 4];
+        file.read_exact(&mut magic).await?;
+        anyhow::ensure!(&magic == b"lmgg", "Файл не является моделью Whisper GGML");
+        drop(file);
+        tokio::fs::rename(&temporary, &path).await?;
+        Ok::<(), anyhow::Error>(())
+    }.await;
+    if result.is_err() { let _ = tokio::fs::remove_file(&temporary).await; }
+    result?;
+    progress("Загрузка модели в память…".into());
     Ok(path)
 }
 
@@ -97,6 +138,7 @@ impl WhisperEngine {
             params.set_language(None);
         }
         params.set_translate(false);
+        params.set_n_threads(std::thread::available_parallelism().map(|n| n.get().saturating_sub(1).clamp(1, 8) as i32).unwrap_or(2));
         params.set_print_progress(false);
         params.set_print_special(false);
         params.set_print_realtime(false);
@@ -136,5 +178,31 @@ impl WhisperEngine {
     #[cfg(not(feature = "local-whisper"))]
     pub fn transcribe(&self, _samples: &[f32], _language_mode: &str) -> anyhow::Result<TranscriptionResult> {
         Err(anyhow::anyhow!("Офлайн-движок отключён в этой сборке"))
+    }
+}
+
+#[cfg(all(test, feature = "local-whisper"))]
+mod tests {
+    use super::*;
+
+    /// Exercises the real HTTP download, GGML validation, model loader and
+    /// recognizer without depending on a microphone or desktop audio routing.
+    #[tokio::test]
+    #[ignore = "Downloads the tiny model and the official whisper.cpp sample"]
+    async fn transcribes_official_whisper_sample() {
+        let path = ensure_model_downloaded("tiny", |_| {}).await.unwrap();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60)).build().unwrap();
+        let bytes = client.get("https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/samples/jfk.wav")
+            .send().await.unwrap().error_for_status().unwrap().bytes().await.unwrap();
+        let mut wav = hound::WavReader::new(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(wav.spec().sample_rate, 16_000);
+        assert_eq!(wav.spec().channels, 1);
+        let samples: Vec<f32> = wav.samples::<i16>().map(|v| v.unwrap() as f32 / 32768.0).collect();
+        let engine = WhisperEngine::new();
+        engine.load_model(&path).unwrap();
+        let result = engine.transcribe(&samples, "en").unwrap();
+        assert!(result.text.to_lowercase().contains("country"), "Unexpected transcript: {}", result.text);
+        assert_eq!(result.language, "en");
     }
 }

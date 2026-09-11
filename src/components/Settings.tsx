@@ -35,6 +35,8 @@ export default function Settings() {
   const [dictWord, setDictWord] = useState("");
   const [saved, setSaved] = useState(false);
   const [capturing, setCapturing] = useState(false);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
   const meterTimer = useRef<number | null>(null);
 
   const refreshDevices = async () => {
@@ -43,30 +45,37 @@ export default function Settings() {
   };
 
   useEffect(() => {
-    invoke<AppConfig>("get_config").then(setCfg).catch(() => {});
-    refreshDevices().catch(() => {});
+    invoke<AppConfig>("get_config").then(setCfg).catch((e) => setError(String(e)));
+    refreshDevices().catch((e) => setError(String(e)));
     return () => { if (meterTimer.current) window.clearInterval(meterTimer.current); invoke("stop_microphone_test").catch(() => {}); };
   }, []);
 
   const save = async (next: AppConfig) => {
-    setCfg(next);
-    await invoke("set_config", { config: next });
-    setSaved(true); window.setTimeout(() => setSaved(false), 1100);
+    setSaving(true); setError("");
+    try {
+      await invoke("set_config", { config: next });
+      setCfg(next);
+      setSaved(true); window.setTimeout(() => setSaved(false), 1100);
+    } catch (e) { setError(String(e)); }
+    finally { setSaving(false); }
   };
 
   const startTest = async (device = cfg.input_device) => {
+    setError("");
+    try {
     await invoke("start_microphone_test", { device });
     setTesting(true);
     if (meterTimer.current) window.clearInterval(meterTimer.current);
     meterTimer.current = window.setInterval(async () => {
       try { setLevel(await invoke<number>("get_audio_level")); } catch { setLevel(0); }
     }, 80);
+    } catch (e) { setError(String(e)); }
   };
 
   const stopTest = async () => {
     if (meterTimer.current) window.clearInterval(meterTimer.current);
     meterTimer.current = null; setTesting(false); setLevel(0);
-    await invoke("stop_microphone_test");
+    await invoke("stop_microphone_test").catch((e) => setError(String(e)));
   };
 
   const chooseDevice = async (device: string) => {
@@ -76,7 +85,9 @@ export default function Settings() {
 
   const captureHotkey = async () => {
     setCapturing(true);
+    setError("");
     try { await save({ ...cfg, hotkey: await invoke<string>("capture_next_hotkey") }); }
+    catch (e) { setError(String(e)); }
     finally { setCapturing(false); }
   };
 
@@ -89,9 +100,11 @@ export default function Settings() {
   return (
     <div className="settings modern-settings">
       <div className="settings-title"><div><h2>Настройки</h2><p>Настройте DictaFlow под свой голос и рабочий процесс.</p></div><div className="brand-pill">DictaFlow</div></div>
+      {error && <p className="error-text" role="alert">{error}</p>}
+      <fieldset disabled={saving || capturing} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
 
       <section className="settings-card microphone-card">
-        <div className="section-heading"><div><span className="section-icon">◉</span><div><h3>Микрофон</h3><p>Выберите устройство и проверьте уровень входного сигнала.</p></div></div><button className="ghost-button" onClick={() => refreshDevices()}>Обновить</button></div>
+        <div className="section-heading"><div><span className="section-icon">◉</span><div><h3>Микрофон</h3><p>Выберите устройство и проверьте уровень входного сигнала.</p></div></div><button className="ghost-button" onClick={() => refreshDevices().catch((e) => setError(String(e)))}>Обновить</button></div>
         <select value={cfg.input_device} onChange={(e) => chooseDevice(e.target.value)}>
           <option value="">Системный микрофон по умолчанию</option>
           {devices.map((d) => <option key={d.name} value={d.name}>{d.name}{d.is_default ? " — по умолчанию" : ""}</option>)}
@@ -102,7 +115,8 @@ export default function Settings() {
 
       <section className="settings-card">
         <div className="section-heading"><div><span className="section-icon">⌨</span><div><h3>Горячая клавиша</h3><p>Удерживайте клавишу, чтобы говорить; отпустите для вставки.</p></div></div></div>
-        <div className="row"><input readOnly value={cfg.hotkey} /><button onClick={captureHotkey} disabled={capturing}>{capturing ? "Нажмите клавишу…" : "Назначить"}</button></div>
+        <div className="row"><select aria-label="Горячая клавиша" value={cfg.hotkey} onChange={(e) => save({ ...cfg, hotkey: e.target.value })}>{["RightCtrl", "LeftCtrl", "RightAlt", "LeftAlt", "CapsLock", "RightShift", "LeftShift", ...Array.from({ length: 12 }, (_, i) => `F${i + 1}`)].map((key) => <option key={key}>{key}</option>)}</select><button onClick={captureHotkey} disabled={capturing}>{capturing ? "Нажмите клавишу…" : "Назначить"}</button></div>
+        <p className="muted">Выберите клавишу из списка или нажмите «Назначить», затем Ctrl, Alt, Shift, CapsLock или F1–F12. Esc — отмена; ожидание — 10 секунд.</p>
       </section>
 
       <section className="settings-card two-column-card">
@@ -123,6 +137,7 @@ export default function Settings() {
       <section className="settings-card"><h3>Пользовательский словарь</h3><div className="row"><input placeholder="Имя, термин, аббревиатура…" value={dictWord} onChange={(e) => setDictWord(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addWord()} /><button onClick={addWord}>Добавить</button></div><div className="chips">{cfg.custom_dictionary.map((w, i) => <span key={i} className="chip">{w}<button onClick={() => save({ ...cfg, custom_dictionary: cfg.custom_dictionary.filter((_, x) => x !== i) })}>×</button></span>)}</div></section>
 
       <section className="settings-card"><h3>Система</h3><Toggle label="Запускать вместе с Windows" checked={cfg.start_with_windows} onChange={(v) => save({ ...cfg, start_with_windows: v })} /><Toggle label="Сворачивать в трей вместо закрытия" checked={cfg.minimize_to_tray} onChange={(v) => save({ ...cfg, minimize_to_tray: v })} /></section>
+      </fieldset>
       {saved && <div className="saved-toast">Сохранено</div>}
     </div>
   );
