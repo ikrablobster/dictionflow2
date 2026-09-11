@@ -54,6 +54,10 @@ jobs:
       - name: Сборка и упаковка Windows
         run: npm run tauri build
 
+      - name: Проверка распознавания контрольной аудиозаписи
+        working-directory: src-tauri
+        run: cargo test --release transcribes_official_whisper_sample -- --ignored
+
       - name: Загрузка установщиков
         uses: actions/upload-artifact@v4
         with:

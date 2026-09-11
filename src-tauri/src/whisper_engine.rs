@@ -180,3 +180,29 @@ impl WhisperEngine {
         Err(anyhow::anyhow!("Офлайн-движок отключён в этой сборке"))
     }
 }
+
+#[cfg(all(test, feature = "local-whisper"))]
+mod tests {
+    use super::*;
+
+    /// Exercises the real HTTP download, GGML validation, model loader and
+    /// recognizer without depending on a microphone or desktop audio routing.
+    #[tokio::test]
+    #[ignore = "Downloads the tiny model and the official whisper.cpp sample"]
+    async fn transcribes_official_whisper_sample() {
+        let path = ensure_model_downloaded("tiny", |_| {}).await.unwrap();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60)).build().unwrap();
+        let bytes = client.get("https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/samples/jfk.wav")
+            .send().await.unwrap().error_for_status().unwrap().bytes().await.unwrap();
+        let mut wav = hound::WavReader::new(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(wav.spec().sample_rate, 16_000);
+        assert_eq!(wav.spec().channels, 1);
+        let samples: Vec<f32> = wav.samples::<i16>().map(|v| v.unwrap() as f32 / 32768.0).collect();
+        let engine = WhisperEngine::new();
+        engine.load_model(&path).unwrap();
+        let result = engine.transcribe(&samples, "en").unwrap();
+        assert!(result.text.to_lowercase().contains("country"), "Unexpected transcript: {}", result.text);
+        assert_eq!(result.language, "en");
+    }
+}
