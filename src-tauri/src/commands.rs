@@ -94,9 +94,8 @@ pub async fn stop_microphone_test(state: State<'_, AppState>) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub async fn capture_next_hotkey() -> Result<String, String> {
-    tokio::task::spawn_blocking(|| hotkey::capture_single_press(10_000))
-        .await.map_err(|e| e.to_string())?
+pub fn set_hotkey_capture(active: bool) {
+    hotkey::set_capture_mode(active);
 }
 
 #[tauri::command]
@@ -127,6 +126,7 @@ pub async fn start_dictation(app: AppHandle, state: State<'_, AppState>, insert:
         return Err(error);
     }
     *state.is_listening.lock().unwrap() = true;
+    *state.preview_cancel.lock().unwrap() = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     *state.insert_result.lock().unwrap() = insert.unwrap_or(false);
     let session = state.session.fetch_add(1, Ordering::SeqCst) + 1;
     let _ = app.emit("dictation://partial", String::new());
@@ -154,17 +154,19 @@ fn spawn_live_preview(app: AppHandle, language_mode: String, session: u64) {
     tauri::async_runtime::spawn(async move {
         let mut last_preview = String::new();
         loop {
-            tokio::time::sleep(std::time::Duration::from_millis(1800)).await;
+            // Short dictations should only be processed once, after release.
+            tokio::time::sleep(std::time::Duration::from_secs(4)).await;
             let state = app.state::<AppState>();
             if state.session.load(Ordering::SeqCst) != session { break; }
             let samples = state.audio.lock().unwrap().snapshot();
             if samples.len() < 16_000 { continue; }
             let worker_app = app.clone();
             let lang = language_mode.clone();
+            let cancel = state.preview_cancel.lock().unwrap().clone();
             let result = tokio::task::spawn_blocking(move || {
                 let state = worker_app.state::<AppState>();
                 if state.session.load(Ordering::SeqCst) != session { return Ok(None); }
-                state.engine.transcribe(&samples, &lang).map(Some)
+                state.engine.transcribe_cancellable(&samples, &lang, Some(cancel)).map(Some)
             }).await;
             if state.session.load(Ordering::SeqCst) != session { break; }
             match result {
@@ -194,9 +196,12 @@ pub async fn stop_dictation(app: AppHandle, state: State<'_, AppState>) -> Resul
     let _operation = state.operation.lock().await;
     if !*state.is_listening.lock().unwrap() { return Ok(()); }
     *state.is_listening.lock().unwrap() = false;
+    state.preview_cancel.lock().unwrap().store(true, Ordering::Relaxed);
     state.session.fetch_add(1, Ordering::SeqCst);
     emit_status(&app, "processing", None);
+    let started = std::time::Instant::now();
     let samples = state.audio.lock().unwrap().stop();
+    let audio_seconds = samples.len() as f64 / 16_000.0;
     let audio_error = state.audio.lock().unwrap().error();
     let cfg = state.config.lock().unwrap().clone();
     let insert = *state.insert_result.lock().unwrap();
@@ -240,7 +245,7 @@ pub async fn stop_dictation(app: AppHandle, state: State<'_, AppState>) -> Resul
     }.await;
     set_overlay_visible(&app, false);
     match &result {
-        Ok(()) => emit_status(&app, "idle", None),
+        Ok(()) => emit_status(&app, "idle", Some(format!("Обработка: {:.1} с · Запись: {:.1} с · {}", started.elapsed().as_secs_f64(), audio_seconds, cfg.model_size))),
         Err(error) => emit_status(&app, "error", Some(error.clone())),
     }
     result

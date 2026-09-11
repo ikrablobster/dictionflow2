@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { captureFocusedHotkey, HOTKEYS } from "../hotkeyCapture";
 
 interface AudioDevice { name: string; is_default: boolean; }
 interface AppConfig {
@@ -21,8 +22,8 @@ interface AppConfig {
 }
 
 const DEFAULTS: AppConfig = {
-  hotkey: "RightCtrl", language_mode: "auto", model_size: "small", input_device: "",
-  show_transcription_overlay: true, live_preview: true, cloud_enabled: false, cloud_api_key: "",
+  hotkey: "RightCtrl", language_mode: "auto", model_size: "tiny", input_device: "",
+  show_transcription_overlay: true, live_preview: false, cloud_enabled: false, cloud_api_key: "",
   auto_punctuation: true, grammar_correction: true, voice_commands: true, custom_dictionary: [],
   insertion_mode: "clipboard_paste", start_with_windows: false, minimize_to_tray: true,
 };
@@ -38,6 +39,7 @@ export default function Settings() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const meterTimer = useRef<number | null>(null);
+  const cancelCapture = useRef<(() => void) | null>(null);
 
   const refreshDevices = async () => {
     const found = await invoke<AudioDevice[]>("list_input_devices");
@@ -47,7 +49,7 @@ export default function Settings() {
   useEffect(() => {
     invoke<AppConfig>("get_config").then(setCfg).catch((e) => setError(String(e)));
     refreshDevices().catch((e) => setError(String(e)));
-    return () => { if (meterTimer.current) window.clearInterval(meterTimer.current); invoke("stop_microphone_test").catch(() => {}); };
+    return () => { cancelCapture.current?.(); if (meterTimer.current) window.clearInterval(meterTimer.current); invoke("stop_microphone_test").catch(() => {}); };
   }, []);
 
   const save = async (next: AppConfig) => {
@@ -84,11 +86,21 @@ export default function Settings() {
   };
 
   const captureHotkey = async () => {
-    setCapturing(true);
+    if (cancelCapture.current) { cancelCapture.current(); return; }
     setError("");
-    try { await save({ ...cfg, hotkey: await invoke<string>("capture_next_hotkey") }); }
+    try {
+      await invoke("set_hotkey_capture", { active: true });
+      const capture = captureFocusedHotkey();
+      cancelCapture.current = capture.cancel;
+      setCapturing(true);
+      await save({ ...cfg, hotkey: await capture.result });
+    }
     catch (e) { setError(String(e)); }
-    finally { setCapturing(false); }
+    finally {
+      cancelCapture.current = null;
+      setCapturing(false);
+      await invoke("set_hotkey_capture", { active: false }).catch(() => {});
+    }
   };
 
   const addWord = () => {
@@ -101,7 +113,7 @@ export default function Settings() {
     <div className="settings modern-settings">
       <div className="settings-title"><div><h2>Настройки</h2><p>Настройте DictaFlow под свой голос и рабочий процесс.</p></div><div className="brand-pill">DictaFlow</div></div>
       {error && <p className="error-text" role="alert">{error}</p>}
-      <fieldset disabled={saving || capturing} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+      <fieldset disabled={saving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
 
       <section className="settings-card microphone-card">
         <div className="section-heading"><div><span className="section-icon">◉</span><div><h3>Микрофон</h3><p>Выберите устройство и проверьте уровень входного сигнала.</p></div></div><button className="ghost-button" onClick={() => refreshDevices().catch((e) => setError(String(e)))}>Обновить</button></div>
@@ -115,14 +127,16 @@ export default function Settings() {
 
       <section className="settings-card">
         <div className="section-heading"><div><span className="section-icon">⌨</span><div><h3>Горячая клавиша</h3><p>Удерживайте клавишу, чтобы говорить; отпустите для вставки.</p></div></div></div>
-        <div className="row"><select aria-label="Горячая клавиша" value={cfg.hotkey} onChange={(e) => save({ ...cfg, hotkey: e.target.value })}>{["RightCtrl", "LeftCtrl", "RightAlt", "LeftAlt", "CapsLock", "RightShift", "LeftShift", ...Array.from({ length: 12 }, (_, i) => `F${i + 1}`)].map((key) => <option key={key}>{key}</option>)}</select><button onClick={captureHotkey} disabled={capturing}>{capturing ? "Нажмите клавишу…" : "Назначить"}</button></div>
+        <div className="row"><select aria-label="Горячая клавиша" disabled={capturing} value={cfg.hotkey} onChange={(e) => save({ ...cfg, hotkey: e.target.value })}>{HOTKEYS.map((key) => <option key={key}>{key}</option>)}</select><button onClick={captureHotkey}>{capturing ? "Отменить назначение" : "Назначить"}</button></div>
         <p className="muted">Выберите клавишу из списка или нажмите «Назначить», затем Ctrl, Alt, Shift, CapsLock или F1–F12. Esc — отмена; ожидание — 10 секунд.</p>
       </section>
 
       <section className="settings-card two-column-card">
         <div><h3>Язык</h3><select value={cfg.language_mode} onChange={(e) => save({ ...cfg, language_mode: e.target.value as AppConfig["language_mode"] })}><option value="auto">Авто — RU / UK / EN</option><option value="ru">Русский</option><option value="uk">Украинский</option><option value="en">English</option></select></div>
-        <div><h3>Whisper</h3><select value={cfg.model_size} onChange={(e) => save({ ...cfg, model_size: e.target.value as AppConfig["model_size"] })}><option value="tiny">Tiny — быстрее</option><option value="base">Base</option><option value="small">Small — рекомендуется</option><option value="medium">Medium — точнее</option><option value="large-v3">Large v3 — максимум</option></select></div>
+        <div><h3>Whisper</h3><select value={cfg.model_size} onChange={(e) => save({ ...cfg, model_size: e.target.value as AppConfig["model_size"] })}><option value="tiny">Tiny — быстрее</option><option value="base">Base — баланс</option><option value="small">Small — точнее, медленнее</option><option value="medium">Medium — точнее</option><option value="large-v3">Large v3 — максимум</option></select></div>
       </section>
+
+      <section className="settings-card"><h3>Скорость распознавания</h3><p className="muted">На ноутбуках без ускорения GPU начните с Tiny и отключённого предпросмотра. Выберите конкретный язык выше. Small и более крупные модели на слабом процессоре могут обрабатывать короткую запись десятки секунд. Tiny быстрее, но чаще ошибается.</p><button onClick={() => save({ ...cfg, model_size: "tiny", live_preview: false })}>Включить быстрые настройки</button></section>
 
       <section className="settings-card"><h3>Поведение диктовки</h3>
         <Toggle label="Показывать всплывающее окно транскрипции" checked={cfg.show_transcription_overlay} onChange={(v) => save({ ...cfg, show_transcription_overlay: v })} />

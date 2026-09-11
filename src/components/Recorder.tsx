@@ -36,7 +36,7 @@ export default function Recorder({
     <div className="recorder">
       <div className={`status-dot ${status.state}`} />
       <h2>{stateLabel[status.state]}</h2>
-      {status.message && <p className="error-text">{status.message}</p>}
+      {status.message && <p className={status.state === "error" ? "error-text" : "hint"}>{status.message}</p>}
       {error && error !== status.message && <p className="error-text" role="alert">{error}</p>}
 
       <button disabled={pending || status.state === "loading" || status.state === "processing"} className={`mic-btn ${status.state === "listening" ? "on" : ""}`} onClick={toggle}>

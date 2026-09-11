@@ -1,6 +1,6 @@
 [package]
 name = "dictaflow"
-version = "0.2.1"
+version = "0.2.2"
 description = "Real-time offline-first voice dictation with smart punctuation for Windows"
 authors = ["DictaFlow"]
 edition = "2021"
@@ -61,8 +61,8 @@ whisper-rs = { version = "0.13", optional = true }
 default = ["local-whisper"]
 local-whisper = ["dep:whisper-rs"]
 
-[dev-dependencies]
-hound = "3.5"
+[dependencies.hound]
+version = "3.5"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [

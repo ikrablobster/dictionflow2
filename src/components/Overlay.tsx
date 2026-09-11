@@ -35,7 +35,7 @@ export default function Overlay() {
   return (
     <div className="voice-overlay">
       <div className="overlay-top">
-        <div className="brand-mark">D</div>
+        <img src="/app-icon.ico" alt="" width="28" height="28" />
         <strong>DictaFlow</strong>
         <span className="record-dot" />
         <span className="overlay-status">{status}</span>
@@ -44,7 +44,7 @@ export default function Overlay() {
         {Array.from({ length: 34 }, (_, i) => <i key={i} style={{ animation: "none", height: `${3 + level * (12 + 16 * Math.abs(Math.sin(i * 0.7)))}px`, opacity: 0.3 + level * 0.7 }} />)}
       </div>
       <div className={`overlay-text ${text ? "" : "placeholder"}`}>
-        {text || "Говорите. Предпросмотр последних 12 секунд появится после обработки; полный текст — после остановки."}
+        {text || (recording ? "Говорите. Отпустите горячую клавишу или нажмите «Остановить» для получения текста." : "Распознавание записи…")}
       </div>
     </div>
   );

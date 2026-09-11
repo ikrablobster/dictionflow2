@@ -64,16 +64,31 @@ describe("recording controls", () => {
 
 describe("hotkey settings", () => {
   it("recovers after a capture timeout and offers a dropdown fallback", async () => {
+    vi.useFakeTimers();
     invoke.mockImplementation(async (command) => {
       if (command === "get_config") throw new Error("No saved config");
       if (command === "list_input_devices") return [];
-      if (command === "capture_next_hotkey") throw new Error("Тайм-аут ожидания клавиши");
     });
     await render(<Settings />);
     const assign = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Назначить")!;
     await click(assign);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
     expect(assign.disabled).toBe(false);
     expect(container.textContent).toContain("Тайм-аут ожидания клавиши");
     expect(container.querySelectorAll('select[aria-label="Горячая клавиша"] option').length).toBe(19);
+    expect(invoke).toHaveBeenCalledWith("set_hotkey_capture", { active: false });
+    vi.useRealTimers();
+  });
+  it("assigns the physical right modifier through the button and restores the hook", async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === "get_config") throw new Error("No saved config");
+      if (command === "list_input_devices") return [];
+    });
+    await render(<Settings />);
+    await click(Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Назначить")!);
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "ShiftRight", key: "Shift", bubbles: true })); });
+    expect(invoke).toHaveBeenCalledWith("set_config", { config: expect.objectContaining({ hotkey: "RightShift" }) });
+    expect(invoke).toHaveBeenLastCalledWith("set_hotkey_capture", { active: false });
+    expect(container.textContent).toContain("Назначить");
   });
 });
