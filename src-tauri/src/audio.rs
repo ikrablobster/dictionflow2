@@ -17,6 +17,7 @@ struct CaptureWorker {
     stream: Option<cpal::Stream>,
     sample_rate: u32,
     level_bits: Arc<AtomicU32>,
+    error: Arc<Mutex<Option<String>>>,
 }
 
 impl CaptureWorker {
@@ -26,6 +27,7 @@ impl CaptureWorker {
             stream: None,
             sample_rate: 16_000,
             level_bits: Arc::new(AtomicU32::new(0.0f32.to_bits())),
+            error: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -55,6 +57,7 @@ impl CaptureWorker {
         // into a real dictation session without leaving a second audio stream.
         self.stream = None;
         self.buffer.lock().unwrap().clear();
+        *self.error.lock().unwrap() = None;
         self.set_level(0.0);
 
         let host = cpal::default_host();
@@ -75,7 +78,8 @@ impl CaptureWorker {
 
         let buffer = self.buffer.clone();
         let level = self.level_bits.clone();
-        let err_fn = |err| eprintln!("[audio] ошибка потока: {err}");
+        let error = self.error.clone();
+        let err_fn = move |err| { *error.lock().unwrap() = Some(format!("Ошибка потока микрофона: {err}")); };
 
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => device.build_input_stream(
@@ -226,6 +230,7 @@ enum AudioRequest {
 pub struct AudioCapture {
     sender: mpsc::Sender<AudioRequest>,
     level_bits: Arc<AtomicU32>,
+    error: Arc<Mutex<Option<String>>>,
 }
 
 impl AudioCapture {
@@ -233,9 +238,12 @@ impl AudioCapture {
         let (sender, receiver) = mpsc::channel();
         let level_bits = Arc::new(AtomicU32::new(0.0f32.to_bits()));
         let worker_level = level_bits.clone();
+        let error = Arc::new(Mutex::new(None));
+        let worker_error = error.clone();
         std::thread::spawn(move || {
             let mut capture = CaptureWorker::new();
             capture.level_bits = worker_level;
+            capture.error = worker_error;
             while let Ok(request) = receiver.recv() {
                 match request {
                     AudioRequest::Start(device, record, reply) => {
@@ -246,10 +254,11 @@ impl AudioCapture {
                 }
             }
         });
-        Self { sender, level_bits }
+        Self { sender, level_bits, error }
     }
     pub fn list_input_devices() -> anyhow::Result<Vec<AudioDeviceInfo>> { CaptureWorker::list_input_devices() }
     pub fn start(&mut self, device: &str) -> anyhow::Result<()> { self.begin(device, true) }
+    pub fn error(&self) -> Option<String> { self.error.lock().unwrap().clone() }
     pub fn start_test(&mut self, device: &str) -> anyhow::Result<()> { self.begin(device, false) }
     fn begin(&self, device: &str, record: bool) -> anyhow::Result<()> {
         let (tx, rx) = mpsc::channel();

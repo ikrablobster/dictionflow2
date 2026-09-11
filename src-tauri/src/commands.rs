@@ -20,6 +20,10 @@ pub struct EngineStatus {
 fn emit_status(app: &AppHandle, state: &str, message: Option<String>) {
     let status = EngineStatus { state: state.into(), message };
     *app.state::<AppState>().status.lock().unwrap() = status.clone();
+    if let Some(tray) = app.tray_by_id("dictaflow-main-tray") {
+        let tooltip = match state { "loading" => "DictaFlow — загрузка модели", "listening" => "DictaFlow — идёт запись", "processing" => "DictaFlow — распознавание", "error" => "DictaFlow — ошибка, откройте приложение", _ => "DictaFlow — голос в текст" };
+        let _ = tray.set_tooltip(Some(tooltip));
+    }
     let _ = app.emit("dictation://status", status);
 }
 
@@ -103,6 +107,8 @@ pub async fn start_dictation(app: AppHandle, state: State<'_, AppState>, insert:
     let cfg = state.config.lock().unwrap().clone();
     config::validate(&cfg)?;
     state.audio.lock().unwrap().stop();
+    let _ = app.emit("dictation://partial", String::new());
+    if cfg.show_transcription_overlay { set_overlay_visible(&app, true); }
     emit_status(&app, "loading", Some("Подготовка модели распознавания… При первом запуске требуется интернет.".into()));
     let result = async {
         let progress_app = app.clone();
@@ -128,10 +134,16 @@ pub async fn start_dictation(app: AppHandle, state: State<'_, AppState>, insert:
     emit_status(&app, "listening", None);
     let timeout_app = app.clone();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(600)).await;
-        let state = timeout_app.state::<AppState>();
-        if state.session.load(Ordering::SeqCst) == session {
-            let _ = stop_dictation(timeout_app.clone(), state).await;
+        let started = std::time::Instant::now();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let state = timeout_app.state::<AppState>();
+            if state.session.load(Ordering::SeqCst) != session { break; }
+            let failed = state.audio.lock().unwrap().error().is_some();
+            if failed || started.elapsed().as_secs() >= 600 {
+                let _ = stop_dictation(timeout_app.clone(), state).await;
+                break;
+            }
         }
     });
     if cfg.live_preview { spawn_live_preview(app.clone(), cfg.language_mode, session); }
@@ -185,9 +197,11 @@ pub async fn stop_dictation(app: AppHandle, state: State<'_, AppState>) -> Resul
     state.session.fetch_add(1, Ordering::SeqCst);
     emit_status(&app, "processing", None);
     let samples = state.audio.lock().unwrap().stop();
+    let audio_error = state.audio.lock().unwrap().error();
     let cfg = state.config.lock().unwrap().clone();
     let insert = *state.insert_result.lock().unwrap();
     let result = async {
+        if let Some(error) = audio_error { return Err(error); }
         if samples.len() < 1600 { return Ok(()); }
         let worker_app = app.clone();
         let lang = cfg.language_mode.clone();

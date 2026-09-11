@@ -1,6 +1,6 @@
 [package]
 name = "dictaflow"
-version = "0.1.0"
+version = "0.2.1"
 description = "Real-time offline-first voice dictation with smart punctuation for Windows"
 authors = ["DictaFlow"]
 edition = "2021"
