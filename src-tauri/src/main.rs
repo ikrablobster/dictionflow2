@@ -32,6 +32,7 @@ fn main() {
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::engine_ping,
+            commands::get_engine_status,
             commands::get_config,
             commands::set_config,
             commands::list_input_devices,
@@ -74,6 +75,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&settings, &history, &sep1, &paste, &restart, &quit])?;
 
     TrayIconBuilder::with_id("dictaflow-main-tray")
+        .icon(tauri::include_image!("icons/tray.png"))
         .menu(&menu)
         .tooltip("DictaFlow — голос в текст")
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -118,28 +120,41 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
 }
 
 fn setup_global_hotkey(app: tauri::AppHandle) {
-    let app_for_get_key = app.clone();
-    let app_for_press = app.clone();
-    let app_for_release = app.clone();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<bool>();
+    let worker_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut owns_recording = false;
+        while let Some(pressed) = rx.recv().await {
+            let state = worker_app.state::<AppState>();
+            if pressed {
+                if !*state.is_listening.lock().unwrap() {
+                    owns_recording = commands::start_dictation(worker_app.clone(), state, Some(true)).await.is_ok();
+                }
+            } else if owns_recording {
+                let _ = commands::stop_dictation(worker_app.clone(), state).await;
+                owns_recording = false;
+            }
+        }
+    });
+    let release_tx = tx.clone();
     hotkey::spawn_listener(
         move || {
-            let state = app_for_get_key.state::<AppState>();
-            let name = state.config.lock().unwrap().hotkey.clone();
-            hotkey::key_from_name(&name)
+            let state = app.state::<AppState>();
+            // Never block a low-level keyboard hook behind settings I/O.
+            let config = state.config.try_lock().ok()?;
+            hotkey::key_from_name(&config.hotkey)
         },
-        move || {
-            let app = app_for_press.clone();
-            tauri::async_runtime::spawn(async move {
-                let state = app.state::<AppState>();
-                let _ = commands::start_dictation(app.clone(), state).await;
-            });
-        },
-        move || {
-            let app = app_for_release.clone();
-            tauri::async_runtime::spawn(async move {
-                let state = app.state::<AppState>();
-                let _ = commands::stop_dictation(app.clone(), state).await;
-            });
-        },
+        move || { let _ = tx.send(true); },
+        move || { let _ = release_tx.send(false); },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn tray_icon_contains_visible_pixels() {
+        let icon = tauri::include_image!("icons/tray.png");
+        assert!(icon.width() >= 16);
+        assert!(icon.rgba().chunks_exact(4).any(|pixel| pixel[3] > 0));
+    }
 }

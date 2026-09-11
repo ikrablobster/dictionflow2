@@ -44,9 +44,12 @@ jobs:
       - name: Проверка frontend
         run: npm run build
 
+      - name: Тесты интерфейса
+        run: npm test
+
       - name: Проверка Rust
         working-directory: src-tauri
-        run: cargo check --release
+        run: cargo test --release
 
       - name: Сборка и упаковка Windows
         run: npm run tauri build

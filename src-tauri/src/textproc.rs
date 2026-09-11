@@ -1,5 +1,6 @@
-use regex::Regex;
+use regex::{Regex, NoExpand};
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 /// Голосовые команды для RU/UK/EN — распознаются после транскрипции,
 /// до финальной пунктуации, и заменяются на управляющие символы/действия.
@@ -55,15 +56,19 @@ pub fn apply_voice_commands(raw: &str, enabled: bool) -> String {
     if !enabled {
         return raw.to_string();
     }
-    let map = voice_command_map();
+    static COMMANDS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
+    let commands = COMMANDS.get_or_init(|| {
+        let map = voice_command_map();
+        let mut phrases: Vec<_> = map.into_iter().collect();
+        phrases.sort_by_key(|(phrase, _)| std::cmp::Reverse(phrase.len()));
+        phrases.into_iter().map(|(phrase, replacement)| {
+            (Regex::new(&format!(r"(?i)\b{}\b", regex::escape(phrase))).unwrap(), replacement)
+        }).collect()
+    });
     let mut result = raw.to_string();
     // Сортируем по длине фразы по убыванию, чтобы "новый абзац" не резалось "новая строка"
-    let mut phrases: Vec<&&str> = map.keys().collect();
-    phrases.sort_by_key(|p| std::cmp::Reverse(p.len()));
-    for phrase in phrases {
-        let replacement = map[phrase];
-        let re = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(phrase))).unwrap();
-        result = re.replace_all(&result, replacement).to_string();
+    for (re, replacement) in commands {
+        result = re.replace_all(&result, NoExpand(replacement)).to_string();
     }
     result
 }
@@ -78,11 +83,13 @@ pub fn auto_punctuate(raw: &str, enabled: bool) -> String {
     let mut text = raw.trim().to_string();
 
     // Убираем повторные пробелы
-    let re_spaces = Regex::new(r"\s+").unwrap();
+    static SPACES: OnceLock<Regex> = OnceLock::new();
+    let re_spaces = SPACES.get_or_init(|| Regex::new(r"[^\S\r\n]+").unwrap());
     text = re_spaces.replace_all(&text, " ").to_string();
 
     // Пробел перед знаком пунктуации — убираем
-    let re_space_before_punct = Regex::new(r"\s+([.,!?;:])").unwrap();
+    static PUNCT: OnceLock<Regex> = OnceLock::new();
+    let re_space_before_punct = PUNCT.get_or_init(|| Regex::new(r"[^\S\r\n]+([.,!?;:])").unwrap());
     text = re_space_before_punct.replace_all(&text, "$1").to_string();
 
     // Капитализация первой буквы предложения (после . ! ? и в начале строки)
@@ -93,7 +100,7 @@ pub fn auto_punctuate(raw: &str, enabled: bool) -> String {
             chars[i] = chars[i].to_uppercase().next().unwrap_or(chars[i]);
             capitalize_next = false;
         }
-        if matches!(chars[i], '.' | '!' | '?') {
+        if matches!(chars[i], '.' | '!' | '?' | '\n') {
             capitalize_next = true;
         }
     }
@@ -116,7 +123,7 @@ pub fn apply_custom_dictionary(text: &str, dictionary: &[String]) -> String {
         // в реальном проде здесь стоит fuzzy-matching (например, crate `strsim`).
         let re = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(term)));
         if let Ok(re) = re {
-            result = re.replace_all(&result, term.as_str()).to_string();
+            result = re.replace_all(&result, NoExpand(term)).to_string();
         }
     }
     result
@@ -133,7 +140,7 @@ pub async fn cloud_grammar_correct(
         return Ok(text.to_string());
     }
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(15)).build()?;
     let lang = match language_hint {
         "ru" => "ru-RU",
         "uk" => "uk-UA",
@@ -178,6 +185,7 @@ pub async fn cloud_grammar_correct(
         })
         .send()
         .await?
+        .error_for_status()?
         .json::<Resp>()
         .await?;
 
@@ -186,4 +194,25 @@ pub async fn cloud_grammar_correct(
         .first()
         .map(|c| c.message.content.trim().to_string())
         .unwrap_or_else(|| text.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn punctuation_preserves_voice_command_line_breaks() {
+        let text = apply_voice_commands("привет новая строка мир новый абзац дальше", true);
+        let text = auto_punctuate(&text, true);
+        assert!(text.contains('\n'));
+        assert!(text.contains("\n\n"));
+        assert!(text.ends_with("Дальше."));
+    }
+    #[test]
+    fn dictionary_does_not_interpret_dollar_signs_as_capture_groups() {
+        assert_eq!(apply_custom_dictionary("usd$100", &["USD$100".into()]), "USD$100");
+    }
+    #[test]
+    fn disabled_commands_preserve_words() {
+        assert_eq!(apply_voice_commands("новая строка", false), "новая строка");
+    }
 }

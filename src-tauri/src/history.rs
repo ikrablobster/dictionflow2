@@ -55,7 +55,7 @@ pub fn search(conn: &Connection, query: &str) -> anyhow::Result<Vec<HistoryEntry
             app_name: row.get(4)?,
         })
     })?;
-    Ok(rows.filter_map(Result::ok).collect())
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
 pub fn clear(conn: &Connection) -> anyhow::Result<()> {
