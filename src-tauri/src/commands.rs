@@ -146,11 +146,11 @@ pub async fn start_dictation(app: AppHandle, state: State<'_, AppState>, insert:
             }
         }
     });
-    if cfg.live_preview { spawn_live_preview(app.clone(), cfg.language_mode, session); }
+    if cfg.live_preview { spawn_live_preview(app.clone(), cfg.language_mode, cfg.fast_recognition, session); }
     Ok(())
 }
 
-fn spawn_live_preview(app: AppHandle, language_mode: String, session: u64) {
+fn spawn_live_preview(app: AppHandle, language_mode: String, fast: bool, session: u64) {
     tauri::async_runtime::spawn(async move {
         let mut last_preview = String::new();
         loop {
@@ -166,7 +166,8 @@ fn spawn_live_preview(app: AppHandle, language_mode: String, session: u64) {
             let result = tokio::task::spawn_blocking(move || {
                 let state = worker_app.state::<AppState>();
                 if state.session.load(Ordering::SeqCst) != session { return Ok(None); }
-                state.engine.transcribe_cancellable(&samples, &lang, Some(cancel)).map(Some)
+                let context = if fast { whisper_engine::short_audio_context(samples.len()) } else { 0 };
+                state.engine.transcribe_cancellable(&samples, &lang, Some(cancel), context).map(Some)
             }).await;
             if state.session.load(Ordering::SeqCst) != session { break; }
             match result {
@@ -210,8 +211,10 @@ pub async fn stop_dictation(app: AppHandle, state: State<'_, AppState>) -> Resul
         if samples.len() < 1600 { return Ok(()); }
         let worker_app = app.clone();
         let lang = cfg.language_mode.clone();
+        let fast = cfg.fast_recognition;
         let transcription = tokio::task::spawn_blocking(move || {
-            worker_app.state::<AppState>().engine.transcribe(&samples, &lang)
+            let context = if fast { whisper_engine::short_audio_context(samples.len()) } else { 0 };
+            worker_app.state::<AppState>().engine.transcribe_cancellable(&samples, &lang, None, context)
         }).await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
         if transcription.text.trim().is_empty() {
             return Err("Речь не распознана. Проверьте выбранный микрофон и язык, затем повторите запись.".into());

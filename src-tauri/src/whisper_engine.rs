@@ -10,6 +10,13 @@ pub struct TranscriptionResult {
     pub language: String,
 }
 
+/// Short clips retain all audio plus padding. Longer recordings use standard chunking.
+pub fn short_audio_context(samples: usize) -> i32 {
+    if samples > 20 * 16_000 { return 0; }
+    let frames = samples.div_ceil(320);
+    (frames + 64).div_ceil(64).saturating_mul(64).clamp(256, 1500) as i32
+}
+
 pub struct WhisperEngine {
     #[cfg(feature = "local-whisper")]
     ctx: Mutex<Option<whisper_rs::WhisperState>>,
@@ -124,11 +131,12 @@ impl WhisperEngine {
 
     #[cfg(feature = "local-whisper")]
     pub fn transcribe(&self, samples: &[f32], language_mode: &str) -> anyhow::Result<TranscriptionResult> {
-        self.transcribe_cancellable(samples, language_mode, None)
+        self.transcribe_cancellable(samples, language_mode, None, 0)
     }
 
     #[cfg(feature = "local-whisper")]
-    pub fn transcribe_cancellable(&self, samples: &[f32], language_mode: &str, cancel: Option<Arc<AtomicBool>>) -> anyhow::Result<TranscriptionResult> {
+    pub fn transcribe_cancellable(&self, samples: &[f32], language_mode: &str, cancel: Option<Arc<AtomicBool>>, audio_context: i32) -> anyhow::Result<TranscriptionResult> {
+        anyhow::ensure!((0..=1500).contains(&audio_context), "Некорректное окно распознавания");
         let mut guard = self.ctx.lock().unwrap();
         let state = guard
             .as_mut()
@@ -144,6 +152,7 @@ impl WhisperEngine {
             params.set_language(None);
         }
         params.set_translate(false);
+        params.set_audio_ctx(audio_context);
         params.set_no_context(true);
         params.set_no_timestamps(true);
         // Avoid repeated temperature fallback decoding of a short/noisy utterance.
@@ -199,7 +208,7 @@ impl WhisperEngine {
     }
 
     #[cfg(not(feature = "local-whisper"))]
-    pub fn transcribe_cancellable(&self, samples: &[f32], language_mode: &str, _cancel: Option<Arc<AtomicBool>>) -> anyhow::Result<TranscriptionResult> {
+    pub fn transcribe_cancellable(&self, samples: &[f32], language_mode: &str, _cancel: Option<Arc<AtomicBool>>, _audio_context: i32) -> anyhow::Result<TranscriptionResult> {
         self.transcribe(samples, language_mode)
     }
 }
@@ -207,6 +216,15 @@ impl WhisperEngine {
 #[cfg(all(test, feature = "local-whisper"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_context_covers_the_entire_clip() {
+        for seconds in [1, 3, 5, 12, 20] {
+            assert!(short_audio_context(seconds * 16_000) >= (seconds * 50 + 64) as i32);
+        }
+        assert_eq!(short_audio_context(3 * 16_000), 256);
+        assert_eq!(short_audio_context(21 * 16_000), 0);
+    }
 
     /// Exercises the real HTTP download, GGML validation, model loader and
     /// recognizer without depending on a microphone or desktop audio routing.
@@ -225,9 +243,9 @@ mod tests {
         let engine = WhisperEngine::new();
         engine.load_model(&path).unwrap();
         let cancelled = Arc::new(AtomicBool::new(true));
-        assert!(engine.transcribe_cancellable(&samples, "en", Some(cancelled)).is_err());
-        for _ in 0..2 {
-            let result = engine.transcribe(&samples, "en").unwrap();
+        assert!(engine.transcribe_cancellable(&samples, "en", Some(cancelled), 0).is_err());
+        for context in [0, short_audio_context(samples.len()), 0] {
+            let result = engine.transcribe_cancellable(&samples, "en", None, context).unwrap();
             assert!(result.text.to_lowercase().contains("country"), "Unexpected transcript: {}", result.text);
             assert_eq!(result.language, "en");
         }

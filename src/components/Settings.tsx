@@ -10,6 +10,7 @@ interface AppConfig {
   input_device: string;
   show_transcription_overlay: boolean;
   live_preview: boolean;
+  fast_recognition: boolean;
   cloud_enabled: boolean;
   cloud_api_key: string;
   auto_punctuation: boolean;
@@ -23,7 +24,7 @@ interface AppConfig {
 
 const DEFAULTS: AppConfig = {
   hotkey: "RightCtrl", language_mode: "auto", model_size: "tiny", input_device: "",
-  show_transcription_overlay: true, live_preview: false, cloud_enabled: false, cloud_api_key: "",
+  show_transcription_overlay: true, live_preview: false, fast_recognition: false, cloud_enabled: false, cloud_api_key: "",
   auto_punctuation: true, grammar_correction: true, voice_commands: true, custom_dictionary: [],
   insertion_mode: "clipboard_paste", start_with_windows: false, minimize_to_tray: true,
 };
@@ -136,7 +137,7 @@ export default function Settings() {
         <div><h3>Whisper</h3><select value={cfg.model_size} onChange={(e) => save({ ...cfg, model_size: e.target.value as AppConfig["model_size"] })}><option value="tiny">Tiny — быстрее</option><option value="base">Base — баланс</option><option value="small">Small — точнее, медленнее</option><option value="medium">Medium — точнее</option><option value="large-v3">Large v3 — максимум</option></select></div>
       </section>
 
-      <section className="settings-card"><h3>Скорость распознавания</h3><p className="muted">На ноутбуках без ускорения GPU начните с Tiny и отключённого предпросмотра. Выберите конкретный язык выше. Small и более крупные модели на слабом процессоре могут обрабатывать короткую запись десятки секунд. Tiny быстрее, но чаще ошибается.</p><button onClick={() => save({ ...cfg, model_size: "tiny", live_preview: false })}>Включить быстрые настройки</button></section>
+      <section className="settings-card"><h3>Скорость распознавания</h3><p className="muted">Быстрые настройки: Tiny, без предпросмотра, ускоренная обработка коротких записей. Выберите конкретный язык выше. Этот режим может чаще ошибаться; для сложной речи отключите ускорение или выберите более крупную модель.</p><button onClick={() => save({ ...cfg, model_size: "tiny", live_preview: false, fast_recognition: true })}>Включить быстрые настройки</button><Toggle label="Ускорять короткие записи (может снижать точность)" checked={cfg.fast_recognition} onChange={(v) => save({ ...cfg, fast_recognition: v })} /></section>
 
       <section className="settings-card"><h3>Поведение диктовки</h3>
         <Toggle label="Показывать всплывающее окно транскрипции" checked={cfg.show_transcription_overlay} onChange={(v) => save({ ...cfg, show_transcription_overlay: v })} />

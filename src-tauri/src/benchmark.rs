@@ -40,10 +40,15 @@ fn run(args: &[String]) -> anyhow::Result<serde_json::Value> {
     engine.load_model(&PathBuf::from(&args[3]))?;
     let load_seconds = start.elapsed().as_secs_f64();
     let mut runs = Vec::new();
+    let context = match args.get(7).map(String::as_str) {
+        Some("fast") => crate::whisper_engine::short_audio_context(samples.len()),
+        Some(value) => value.parse::<i32>()?,
+        None => 0,
+    };
     for _ in 0..2 {
         let start = Instant::now();
-        let result = engine.transcribe(&samples, &args[4])?;
+        let result = engine.transcribe_cancellable(&samples, &args[4], None, context)?;
         runs.push(serde_json::json!({ "seconds": start.elapsed().as_secs_f64(), "text": result.text, "language": result.language }));
     }
-    Ok(serde_json::json!({ "model": args[3], "audio_seconds": samples.len() as f64 / 16_000.0, "load_seconds": load_seconds, "runs": runs }))
+    Ok(serde_json::json!({ "model": args[3], "audio_context": context, "audio_seconds": samples.len() as f64 / 16_000.0, "load_seconds": load_seconds, "runs": runs }))
 }
