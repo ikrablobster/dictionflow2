@@ -1,8 +1,10 @@
 use rdev::{listen, Event, EventType, Key};
-use std::sync::{mpsc, Mutex};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use std::thread;
 
-static CAPTURE: Mutex<Option<mpsc::Sender<Result<String, String>>>> = Mutex::new(None);
+static CAPTURE_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
+pub fn set_capture_mode(active: bool) { *CAPTURE_UNTIL.lock().unwrap() = active.then(|| Instant::now() + Duration::from_secs(12)); }
 
 pub fn key_from_name(name: &str) -> Option<Key> {
     match name {
@@ -49,19 +51,10 @@ where
                 }
                 EventType::KeyPress(k) => {
                     if captured == Some(k) { return; }
-                    let mut capture = CAPTURE.lock().unwrap();
-                    if let Some(tx) = capture.as_ref() {
-                        let result = if k == Key::Escape {
-                            Some(Err("Назначение отменено".into()))
-                        } else { key_to_name(k).map(Ok) };
-                        if let Some(result) = result {
-                            let _ = tx.send(result);
-                            *capture = None;
-                            captured = Some(k);
-                        }
+                    if CAPTURE_UNTIL.lock().unwrap().is_some_and(|until| Instant::now() < until) {
+                        captured = Some(k);
                         return;
                     }
-                    drop(capture);
                     if held.is_none() && get_target_key() == Some(k) {
                         held = Some(k);
                         on_press();
@@ -74,19 +67,6 @@ where
             eprintln!("[hotkey] ошибка глобального слушателя: {e:?}");
         }
     });
-}
-
-pub fn capture_single_press(timeout_ms: u64) -> Result<String, String> {
-    let (tx, rx) = mpsc::channel();
-    {
-        let mut slot = CAPTURE.lock().unwrap();
-        if slot.is_some() { return Err("Назначение уже выполняется".into()); }
-        *slot = Some(tx);
-    }
-    let result = rx.recv_timeout(std::time::Duration::from_millis(timeout_ms))
-        .map_err(|_| "Клавиша не получена. Используйте список клавиш или повторите назначение.".to_string());
-    *CAPTURE.lock().unwrap() = None;
-    result?
 }
 
 #[cfg(test)]

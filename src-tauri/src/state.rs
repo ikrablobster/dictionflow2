@@ -4,6 +4,7 @@ use crate::whisper_engine::WhisperEngine;
 use rusqlite::Connection;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, atomic::AtomicBool};
 
 pub struct AppState {
     pub config: Mutex<AppConfig>,
@@ -16,6 +17,7 @@ pub struct AppState {
     pub status: Mutex<crate::commands::EngineStatus>,
     pub insert_result: Mutex<bool>,
     pub insert_target: Mutex<Option<isize>>,
+    pub preview_cancel: Mutex<Arc<AtomicBool>>,
 }
 
 impl AppState {
@@ -31,6 +33,7 @@ impl AppState {
             status: Mutex::new(crate::commands::EngineStatus { state: "idle".into(), message: None }),
             insert_result: Mutex::new(false),
             insert_target: Mutex::new(None),
+            preview_cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
         }
     }
 }

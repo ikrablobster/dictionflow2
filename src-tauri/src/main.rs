@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod benchmark;
 mod commands;
 mod config;
 mod history;
@@ -18,6 +19,7 @@ use tauri::{
 };
 
 fn main() {
+    if benchmark::run_if_requested() { return; }
     let cfg = config::load_config();
     let db = history::open().expect("не удалось открыть базу истории диктовок");
     let app_state = AppState::new(cfg, db);
@@ -39,7 +41,7 @@ fn main() {
             commands::get_audio_level,
             commands::start_microphone_test,
             commands::stop_microphone_test,
-            commands::capture_next_hotkey,
+            commands::set_hotkey_capture,
             commands::start_dictation,
             commands::stop_dictation,
             commands::search_history,
@@ -75,7 +77,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&settings, &history, &sep1, &paste, &restart, &quit])?;
 
     TrayIconBuilder::with_id("dictaflow-main-tray")
-        .icon(tauri::include_image!("icons/tray.png"))
+        .icon(tauri::include_image!("icons/icon.ico"))
         .menu(&menu)
         .tooltip("DictaFlow — голос в текст")
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -153,7 +155,7 @@ fn setup_global_hotkey(app: tauri::AppHandle) {
 mod tests {
     #[test]
     fn tray_icon_contains_visible_pixels() {
-        let icon = tauri::include_image!("icons/tray.png");
+        let icon = tauri::include_image!("icons/icon.ico");
         assert!(icon.width() >= 16);
         assert!(icon.rgba().chunks_exact(4).any(|pixel| pixel[3] > 0));
     }

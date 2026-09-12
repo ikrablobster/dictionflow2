@@ -27,7 +27,7 @@ export default function App() {
 
   return <div className="app-shell">
     <nav className="tabbar">
-      <div className="app-logo"><span>D</span><b>DictaFlow</b></div>
+      <div className="app-logo"><img src="/app-icon.ico" alt="" width="40" height="40" /><b>DictaFlow</b></div>
       <div className="nav-items">
         <button className={tab === "main" ? "active" : ""} onClick={() => setTab("main")}><i>●</i><span>Диктовка</span></button>
         <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}><i>◷</i><span>История</span></button>

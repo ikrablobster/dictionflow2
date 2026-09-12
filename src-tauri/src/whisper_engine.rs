@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 #[cfg(feature = "local-whisper")]
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
@@ -9,9 +10,16 @@ pub struct TranscriptionResult {
     pub language: String,
 }
 
+/// Short clips retain all audio plus padding. Longer recordings use standard chunking.
+pub fn short_audio_context(samples: usize) -> i32 {
+    if samples > 20 * 16_000 { return 0; }
+    let frames = samples.div_ceil(320);
+    (frames + 64).div_ceil(64).saturating_mul(64).clamp(256, 1500) as i32
+}
+
 pub struct WhisperEngine {
     #[cfg(feature = "local-whisper")]
-    ctx: Mutex<Option<WhisperContext>>,
+    ctx: Mutex<Option<whisper_rs::WhisperState>>,
     #[cfg(not(feature = "local-whisper"))]
     _placeholder: Mutex<()>,
     loaded_model: Mutex<Option<String>>,
@@ -116,19 +124,25 @@ impl WhisperEngine {
         )
         .map_err(|e| anyhow::anyhow!("Не удалось загрузить модель Whisper: {e:?}"))?;
 
-        *self.ctx.lock().unwrap() = Some(ctx);
+        *self.ctx.lock().unwrap() = Some(ctx.create_state()?);
         *guard = path.to_str().map(|s| s.to_string());
         Ok(())
     }
 
     #[cfg(feature = "local-whisper")]
     pub fn transcribe(&self, samples: &[f32], language_mode: &str) -> anyhow::Result<TranscriptionResult> {
-        let guard = self.ctx.lock().unwrap();
-        let ctx = guard
-            .as_ref()
+        self.transcribe_cancellable(samples, language_mode, None, 0)
+    }
+
+    #[cfg(feature = "local-whisper")]
+    pub fn transcribe_cancellable(&self, samples: &[f32], language_mode: &str, cancel: Option<Arc<AtomicBool>>, audio_context: i32) -> anyhow::Result<TranscriptionResult> {
+        anyhow::ensure!((0..=1500).contains(&audio_context), "Некорректное окно распознавания");
+        let mut guard = self.ctx.lock().unwrap();
+        let state = guard
+            .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Модель распознавания не загружена"))?;
 
-        let mut state = ctx.create_state()?;
+        if cancel.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed)) { anyhow::bail!("Предпросмотр отменён"); }
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
         // auto -> whisper сам определит язык (RU/UK/EN хорошо детектируются moделью small+)
@@ -138,6 +152,19 @@ impl WhisperEngine {
             params.set_language(None);
         }
         params.set_translate(false);
+        params.set_audio_ctx(audio_context);
+        params.set_no_context(true);
+        params.set_no_timestamps(true);
+        // Avoid repeated temperature fallback decoding of a short/noisy utterance.
+        params.set_temperature_inc(0.0);
+        if let Some(flag) = cancel.as_ref() {
+            // The Arc stays alive until synchronous state.full returns. The C
+            // callback only reads its AtomicBool, never the Whisper state.
+            unsafe {
+                params.set_abort_callback(Some(should_abort));
+                params.set_abort_callback_user_data(Arc::as_ptr(flag) as *mut std::ffi::c_void);
+            }
+        }
         params.set_n_threads(std::thread::available_parallelism().map(|n| n.get().saturating_sub(1).clamp(1, 8) as i32).unwrap_or(2));
         params.set_print_progress(false);
         params.set_print_special(false);
@@ -179,11 +206,25 @@ impl WhisperEngine {
     pub fn transcribe(&self, _samples: &[f32], _language_mode: &str) -> anyhow::Result<TranscriptionResult> {
         Err(anyhow::anyhow!("Офлайн-движок отключён в этой сборке"))
     }
+
+    #[cfg(not(feature = "local-whisper"))]
+    pub fn transcribe_cancellable(&self, samples: &[f32], language_mode: &str, _cancel: Option<Arc<AtomicBool>>, _audio_context: i32) -> anyhow::Result<TranscriptionResult> {
+        self.transcribe(samples, language_mode)
+    }
 }
 
 #[cfg(all(test, feature = "local-whisper"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_context_covers_the_entire_clip() {
+        for seconds in [1, 3, 5, 12, 20] {
+            assert!(short_audio_context(seconds * 16_000) >= (seconds * 50 + 64) as i32);
+        }
+        assert_eq!(short_audio_context(3 * 16_000), 256);
+        assert_eq!(short_audio_context(21 * 16_000), 0);
+    }
 
     /// Exercises the real HTTP download, GGML validation, model loader and
     /// recognizer without depending on a microphone or desktop audio routing.
@@ -201,8 +242,18 @@ mod tests {
         let samples: Vec<f32> = wav.samples::<i16>().map(|v| v.unwrap() as f32 / 32768.0).collect();
         let engine = WhisperEngine::new();
         engine.load_model(&path).unwrap();
-        let result = engine.transcribe(&samples, "en").unwrap();
-        assert!(result.text.to_lowercase().contains("country"), "Unexpected transcript: {}", result.text);
-        assert_eq!(result.language, "en");
+        let cancelled = Arc::new(AtomicBool::new(true));
+        assert!(engine.transcribe_cancellable(&samples, "en", Some(cancelled), 0).is_err());
+        for context in [0, short_audio_context(samples.len()), 0] {
+            let result = engine.transcribe_cancellable(&samples, "en", None, context).unwrap();
+            assert!(result.text.to_lowercase().contains("country"), "Unexpected transcript: {}", result.text);
+            assert_eq!(result.language, "en");
+        }
     }
+
+}
+
+#[cfg(feature = "local-whisper")]
+unsafe extern "C" fn should_abort(data: *mut std::ffi::c_void) -> bool {
+    !data.is_null() && (*(data as *const AtomicBool)).load(Ordering::Relaxed)
 }

@@ -38,9 +38,6 @@ jobs:
       - name: Установка npm-зависимостей
         run: npm ci
 
-      - name: Генерация иконок
-        run: npx tauri icon src-tauri/icons/icon-source.png -o src-tauri/icons
-
       - name: Проверка frontend
         run: npm run build
 
@@ -63,6 +60,7 @@ jobs:
         with:
           name: dictaflow-windows
           path: |
+            src-tauri/target/release/dictaflow.exe
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
